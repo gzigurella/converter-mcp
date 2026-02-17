@@ -7,7 +7,9 @@ supporting video, audio, images, and ebooks.
 import asyncio
 import logging
 import sys
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -73,7 +75,10 @@ async def server_lifespan(app: FastMCP):
     This context manager handles:
     - Dependency verification at startup
     - Graceful shutdown of running tasks
+    - Cleanup of temporary files
     """
+    temp_dirs: list[Path] = []
+
     try:
         logger.info("Starting Format Converter MCP Server...")
         logger.info("Verifying system dependencies...")
@@ -95,6 +100,18 @@ async def server_lifespan(app: FastMCP):
         logger.info("Shutting down server...")
         shutdown_handler.initiate_shutdown()
         await shutdown_handler.wait_for_tasks()
+
+        logger.info("Cleaning up temporary files...")
+        import shutil
+
+        for temp_dir in temp_dirs:
+            try:
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                    logger.info(f"Removed temp directory: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp directory {temp_dir}: {e}")
+
         logger.info("Server shutdown complete")
 
 

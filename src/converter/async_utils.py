@@ -8,6 +8,7 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import Callable, Awaitable
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -263,3 +264,76 @@ import os as _os
 
 _default_concurrent = min(4, _os.cpu_count() or 4)
 concurrency_limiter = ConcurrencyLimiter(_default_concurrent)
+
+
+class SafePathHandler:
+    """Handle paths with special characters using temporary symlinks."""
+
+    def __init__(self, temp_dir: Path | None = None):
+        """Initialize SafePathHandler.
+
+        Args:
+            temp_dir: Optional temporary directory for symlinks.
+                      If None, uses system temp directory.
+        """
+        self.temp_dir = Path(temp_dir) if temp_dir else Path(tempfile.mkdtemp(prefix="safe_path_"))
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        self._created_symlinks: list[Path] = []
+
+    def create_safe_symlink(self, original_path: Path | str) -> Path:
+        """Create a symlink with URL-encoded name for safe handling.
+
+        Args:
+            original_path: Path to original file
+
+        Returns:
+            Path to the created symlink
+
+        Raises:
+            OSError: If symlink creation fails
+        """
+        original = Path(original_path).resolve()
+
+        if not original.exists():
+            raise FileNotFoundError(f"Original file not found: {original}")
+
+        safe_name = quote(original.name, safe="")
+        symlink_path = self.temp_dir / safe_name
+
+        if symlink_path.exists():
+            symlink_path.unlink()
+
+        try:
+            symlink_path.symlink_to(original)
+            self._created_symlinks.append(symlink_path)
+            logger.debug(f"Created safe symlink: {original} -> {symlink_path}")
+            return symlink_path
+        except OSError as e:
+            logger.error(f"Failed to create symlink for {original}: {e}")
+            raise
+
+    def cleanup(self):
+        """Clean up all created symlinks and temp directory."""
+        for symlink in self._created_symlinks:
+            try:
+                if symlink.is_symlink():
+                    symlink.unlink()
+                    logger.debug(f"Removed symlink: {symlink}")
+            except Exception as e:
+                logger.warning(f"Failed to remove symlink {symlink}: {e}")
+
+        self._created_symlinks.clear()
+
+        try:
+            if self.temp_dir.exists() and not any(self.temp_dir.iterdir()):
+                self.temp_dir.rmdir()
+                logger.debug(f"Removed temp directory: {self.temp_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to remove temp directory {self.temp_dir}: {e}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+        return False

@@ -9,8 +9,9 @@ import asyncio
 import shutil
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
-from ..async_utils import safe_subprocess, concurrency_limiter
+from ..async_utils import safe_subprocess, concurrency_limiter, SafePathHandler
 from ..file_manager import FileManager
 from ..logging_config import ConversionError, FormatNotSupportedError, get_logger
 
@@ -31,6 +32,53 @@ class EbookConverter:
 
     def __init__(self, file_manager: Optional[FileManager] = None):
         self.file_manager = file_manager or FileManager()
+        self._safe_path_handler: Optional[SafePathHandler] = None
+
+    @staticmethod
+    def _has_special_chars(path: Path) -> bool:
+        """Check if a path contains characters that might cause issues.
+
+        Args:
+            path: Path to check
+
+        Returns:
+            True if path contains problematic characters
+        """
+        try:
+            encoded = quote(path.name, safe="-_.~")
+            return encoded != path.name
+        except Exception:
+            return True
+
+    def _ensure_safe_source(self, source: Path) -> tuple[Path, bool]:
+        """Ensure source file path is safe for subprocess execution.
+
+        Creates a symlink if the original path has special characters.
+
+        Args:
+            source: Original source path
+
+        Returns:
+            Tuple of (safe_path, symlink_created)
+        """
+        if not self._has_special_chars(source):
+            return source, False
+
+        if self._safe_path_handler is None:
+            self._safe_path_handler = SafePathHandler()
+
+        try:
+            safe_path = self._safe_path_handler.create_safe_symlink(source)
+            return safe_path, True
+        except Exception as e:
+            logger.warning(f"Failed to create symlink for {source}, using original path: {e}")
+            return source, False
+
+    def cleanup(self):
+        """Clean up temporary symlinks if any were created."""
+        if self._safe_path_handler:
+            self._safe_path_handler.cleanup()
+            self._safe_path_handler = None
 
     @staticmethod
     def is_format_supported(format_name: str, for_output: bool = False) -> bool:
@@ -86,28 +134,35 @@ class EbookConverter:
         if output_path is None:
             output_path = self.file_manager.resolve_output_path(source, target_format)
 
+        safe_source, symlink_created = self._ensure_safe_source(source)
+
         cmd = self._build_calibre_command(
-            source, output_path, target_format, title, author, paper_size, pdf_margin
+            safe_source, output_path, target_format, title, author, paper_size, pdf_margin
         )
 
-        async with concurrency_limiter:
-            try:
-                returncode, stdout, stderr = await safe_subprocess(cmd, timeout=600)
+        try:
+            async with concurrency_limiter:
+                try:
+                    returncode, stdout, stderr = await safe_subprocess(cmd, timeout=600)
 
-                if returncode != 0:
+                    if returncode != 0:
+                        raise ConversionError(
+                            f"Ebook conversion failed",
+                            suggestion=f"Check if Calibre is installed and source file is valid. stderr: {stderr[-500:]}",
+                        )
+
+                except asyncio.TimeoutError:
                     raise ConversionError(
-                        f"Ebook conversion failed",
-                        suggestion=f"Check if Calibre is installed and source file is valid. stderr: {stderr[-500:]}",
+                        "Ebook conversion timed out",
+                        suggestion="Large ebooks may take longer. Try again or use a smaller file.",
                     )
 
-            except asyncio.TimeoutError:
-                raise ConversionError(
-                    "Ebook conversion timed out",
-                    suggestion="Large ebooks may take longer. Try again or use a smaller file.",
-                )
-
-        logger.info(f"Converted {source} -> {output_path}")
-        return output_path
+            logger.info(f"Converted {source} -> {output_path}")
+            return output_path
+        finally:
+            if symlink_created and self._safe_path_handler:
+                logger.debug(f"Cleaning up symlink for {source}")
+                self.cleanup()
 
     def _build_calibre_command(
         self,
@@ -160,18 +215,23 @@ class EbookConverter:
             Dictionary with ebook metadata
         """
         source = Path(source_path)
+        safe_source, symlink_created = self._ensure_safe_source(source)
 
         cmd = [
             "ebook-meta",
-            str(source),
+            str(safe_source),
         ]
 
-        returncode, stdout, stderr = await safe_subprocess(cmd, timeout=30)
+        try:
+            returncode, stdout, stderr = await safe_subprocess(cmd, timeout=30)
 
-        if returncode != 0:
-            return {"error": stderr}
+            if returncode != 0:
+                return {"error": stderr}
 
-        return self._parse_metadata(stdout)
+            return self._parse_metadata(stdout)
+        finally:
+            if symlink_created and self._safe_path_handler:
+                self.cleanup()
 
     def _parse_metadata(self, output: str) -> dict:
         """Parse ebook-meta output into dictionary."""
