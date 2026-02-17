@@ -188,3 +188,4 @@ htmlcov/
 .sisyphus/evidence/
 # QA and temp files
 qa_*.py
+/.sisyphus

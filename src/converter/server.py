@@ -6,7 +6,6 @@ supporting video, audio, images, and ebooks.
 
 import asyncio
 import logging
-import signal
 import sys
 from contextlib import asynccontextmanager
 from typing import Any
@@ -68,7 +67,7 @@ shutdown_handler = GracefulShutdown()
 
 
 @asynccontextmanager
-async def server_lifespan():
+async def server_lifespan(app: FastMCP):
     """Manage server startup and shutdown.
 
     This context manager handles:
@@ -260,25 +259,15 @@ async def get_conversion_info(source_format: str, target_format: str) -> dict[st
     }
 
 
-async def setup_signal_handlers():
-    """Setup signal handlers for graceful shutdown."""
-    loop = asyncio.get_running_loop()
+def main():
+    """Main entry point for the MCP server.
 
-    def handle_signal():
-        logger.info("Received interrupt signal")
-        shutdown_handler.initiate_shutdown()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, handle_signal)
-
-
-async def main():
-    """Main entry point for the MCP server."""
+    Note: mcp.run() manages its own event loop via anyio, so we call it
+    synchronously without wrapping in asyncio.run().
+    """
     try:
-        await setup_signal_handlers()
-
         logger.info("Starting server with stdio transport...")
-        await mcp.run(transport="stdio")
+        mcp.run(transport="stdio")
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
         shutdown_handler.initiate_shutdown()
@@ -290,4 +279,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
