@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import tempfile
+import threading
 from pathlib import Path
 from typing import Callable, Awaitable
 
@@ -15,17 +16,19 @@ class ConcurrencyLimiter:
     """Semaphore-based concurrency control for conversions."""
 
     def __init__(self, max_concurrent: int = 4):
-        self._semaphore = asyncio.Semaphore(max_concurrent)
         self._max_concurrent = max_concurrent
+        self._local = threading.local()
 
     async def acquire(self):
         """Acquire the semaphore."""
-        await self._semaphore.acquire()
+        sem = self._get_semaphore()
+        await sem.acquire()
         return self
 
     def release(self):
         """Release the semaphore."""
-        self._semaphore.release()
+        sem = self._get_semaphore()
+        sem.release()
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -35,6 +38,21 @@ class ConcurrencyLimiter:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         self.release()
+
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        """Get semaphore for current event loop."""
+        import threading
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop_id = id(loop)
+            if not hasattr(self._local, "semaphores"):
+                self._local.semaphores = {}
+            if loop_id not in self._local.semaphores:
+                self._local.semaphores[loop_id] = asyncio.Semaphore(self._max_concurrent)
+            return self._local.semaphores[loop_id]
+        except RuntimeError:
+            return asyncio.Semaphore(self._max_concurrent)
 
 
 class SubprocessTimeoutError(RuntimeError):
