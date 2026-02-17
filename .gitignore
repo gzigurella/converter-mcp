@@ -186,3 +186,5 @@ htmlcov/
 
 # Evidence directory
 .sisyphus/evidence/
+# QA and temp files
+qa_*.py
