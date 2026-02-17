@@ -16,11 +16,20 @@ A FastMCP-based format conversion server providing bidirectional conversion for 
 
 ## Requirements
 
-- Python >= 3.9
-- FFmpeg (for video/audio processing)
-- Calibre (for ebook conversion)
-- Pillow (for image processing)
-- CairoSVG + Cairo library (for SVG conversion)
+### System Dependencies
+
+- **FFmpeg** (required for video/audio processing)
+- **Calibre** (required for ebook conversion)
+- **Cairo library** (optional, for SVG conversion)
+
+### Python Dependencies
+
+Installed automatically via pip:
+- `mcp>=1.0.0` - MCP server framework
+- `ffmpeg-python>=0.2.0` - FFmpeg Python bindings
+- `Pillow>=10.0.0` - Image processing
+- `psutil>=5.9.0` - Resource monitoring
+- `cairosvg>=2.7.0` - SVG conversion (optional, install with `.[svg]`)
 
 ## Installation
 
